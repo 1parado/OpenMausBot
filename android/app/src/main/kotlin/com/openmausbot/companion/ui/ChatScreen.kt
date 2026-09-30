@@ -97,6 +97,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.openmausbot.companion.R
+import com.openmausbot.companion.audio.ReplySpeaker
 import com.openmausbot.companion.core.AttachmentPolicy
 import com.openmausbot.companion.core.Chat
 import com.openmausbot.companion.core.ChatTarget
@@ -108,6 +109,7 @@ import com.openmausbot.companion.core.Dictation
 import com.openmausbot.companion.core.DisplayedMessageAttachment
 import com.openmausbot.companion.core.DownloadedFile
 import com.openmausbot.companion.core.Message
+import com.openmausbot.companion.core.ReplyNarration
 import com.openmausbot.companion.core.ThreadRef
 import com.openmausbot.companion.core.TranscriptRow
 import com.openmausbot.companion.core.target
@@ -432,6 +434,35 @@ private fun LoadedChat(
     val dictationLocked = dictationListening || dictationStarting
 
     val rawTranscript = remember(state, threadId) { state.visibleTranscript(threadId) }
+
+    // Reply audio: the platform TTS reads finished bot replies aloud, the
+    // other half of the loop composer dictation starts. Per chat, per
+    // session; turning it on never replays the backlog — the spoken marker
+    // seeds at the newest reply, so only messages that arrive later are read.
+    val appContext = LocalContext.current
+    val replySpeaker = remember(chatId) { ReplySpeaker(appContext) }
+    var replyAudioOn by remember(chatId) { mutableStateOf(false) }
+    var lastSpokenReplyId by remember(chatId) { mutableStateOf<String?>(null) }
+    DisposableEffect(chatId) {
+        onDispose { replySpeaker.release() }
+    }
+    val toggleReplyAudio = {
+        if (replyAudioOn) {
+            replyAudioOn = false
+            replySpeaker.stop()
+        } else {
+            lastSpokenReplyId = ReplyNarration.nextSpeakable(rawTranscript, null)?.messageId
+            replyAudioOn = true
+        }
+        Unit
+    }
+    LaunchedEffect(replyAudioOn, rawTranscript) {
+        if (!replyAudioOn) return@LaunchedEffect
+        val speakable = ReplyNarration.nextSpeakable(rawTranscript, lastSpokenReplyId) ?: return@LaunchedEffect
+        lastSpokenReplyId = speakable.messageId
+        replySpeaker.speak(speakable.text)
+    }
+
     val activityDetail by environment.chatPreferences.activityDetail.collectAsState()
     val quickReplies by environment.chatPreferences.quickReplies.collectAsState()
     // The source transcript stays intact for approvals, mascot state and
@@ -933,6 +964,8 @@ private fun LoadedChat(
                     unreadElsewhere = remember(state, chat) {
                         (state.unreadCount - if (chat.unread) 1 else 0).coerceAtLeast(0)
                     },
+                    replyAudioOn = replyAudioOn,
+                    onToggleReplyAudio = toggleReplyAudio,
                     onBack = { backBySwipe() },
                     onOpenThreads = {
                         dictation.stop()
@@ -1141,6 +1174,8 @@ private fun ChatHeader(
     chat: Chat,
     face: MausState,
     unreadElsewhere: Int,
+    replyAudioOn: Boolean,
+    onToggleReplyAudio: () -> Unit,
     onBack: () -> Unit,
     onWatchComputer: () -> Unit,
     onOpenProfile: () -> Unit,
@@ -1172,6 +1207,16 @@ private fun ChatHeader(
         ) {
             BackPill(unreadElsewhere = unreadElsewhere, onBack = onBack)
             Spacer(Modifier.weight(1f))
+            ChromeButton(
+                painter = painterResource(if (replyAudioOn) R.drawable.ic_volume_up else R.drawable.ic_volume_off),
+                contentDescription = if (replyAudioOn) {
+                    "Stop reading ${chat.name}'s replies aloud"
+                } else {
+                    "Read ${chat.name}'s replies aloud"
+                },
+                onClick = onToggleReplyAudio,
+                tint = if (replyAudioOn) MaterialTheme.colorScheme.primary else Color.Unspecified,
+            )
             // The computer is a bot idea; a room has none (§12).
             if (chat is Chat.BotChat) {
                 ChromeButton(

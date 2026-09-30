@@ -277,6 +277,13 @@ It does **not** expose approval grants, deletion, arbitrary settings, credential
 
 See [MCP server setup and tool reference](docs/mcp-server.md).
 
+### Chat with your bots on Feishu
+
+A small connector bridges Feishu or Lark chats to your bots: scan one QR code with the Feishu app to create
+the bot app, then messages arrive over a WebSocket long connection — no public callback URL, no port
+forwarding. Each saved app is one bot identity; direct messages always answer, group chats answer on
+@-mention. See [the Feishu connector guide](docs/feishu-connector.md).
+
 ## Quick start
 
 **Released builds ([latest release](https://github.com/milind-soni/OpenMausBot/releases/latest)):** the harness server is embedded, so no separate server setup is required.

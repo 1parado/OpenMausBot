@@ -33,12 +33,13 @@ export function initialDesktopCapabilities(): DesktopCapabilities {
   const platform = typeof window === "undefined" ? undefined : window.ogb?.platform;
   if (!platform) return browserCapabilities;
   const isMac = platform === "darwin";
+  const isWin = platform === "win32";
   const dictation: DesktopCapabilities["dictation"] = {
-    available: isMac,
-    engine: isMac ? "apple-speech" : "none",
+    available: isMac || isWin,
+    engine: isMac ? "apple-speech" : isWin ? "cloud-speech" : "none",
     onDevice: isMac,
   };
-  if (!isMac) dictation.reasonCode = "unsupported-platform";
+  if (!isMac && !isWin) dictation.reasonCode = "unsupported-platform";
   return {
     ...browserCapabilities,
     host: {

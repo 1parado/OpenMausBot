@@ -17,7 +17,7 @@
 // every activity chip the harness narrates (`tool.spoken`) is read aloud as
 // it happens, which is why waiting feels like listening to someone work
 // rather than listening to nothing.
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Loader2, Phone, PhoneOff, X } from "lucide-react";
 
 import { useStore, visibleMessages, type Bot } from "@/state/store";
@@ -33,6 +33,7 @@ import { isRoutineApproval, isSkillApproval, pendingApprovals, spokenApprovalPro
 import { track } from "@/lib/analytics";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { callCapabilityHelp } from "@/lib/call-capability";
+import { speechBridgeFor } from "@/lib/speech-bridge";
 
 /** Spoken answers to a permission card. Anything else is read as a reply
  * to the bot, not as consent — an approval must never be granted by a
@@ -77,7 +78,10 @@ export function CallTargetButton({
   const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
   const active = useOnCall() === targetId;
   const capabilityHelp = capabilitiesReady
-    ? callCapabilityHelp(capabilities, Boolean(window.ogb?.speechStart))
+    ? callCapabilityHelp(
+        capabilities,
+        capabilities.dictation.engine === "cloud-speech" || Boolean(window.ogb?.speechStart),
+      )
     : null;
   const supported = capabilitiesReady && !capabilityHelp;
   const localVoice = localSystemVoiceActive();
@@ -216,6 +220,9 @@ export function CallOverlay({ bot }: { bot: Bot }) {
 function Call({ bot }: { bot: Bot }) {
   const { dispatch } = useStore();
   const speech = useSpeech();
+  const { capabilities } = useDesktopCapabilities();
+  // One speech bridge for the whole call — native on macOS, cloud elsewhere.
+  const bridge = useMemo(() => speechBridgeFor(capabilities), [capabilities]);
   const initialPhase: Phase = bot.busy ? "working" : "listening";
   const [phase, setPhase] = useState<Phase>(initialPhase);
   const [heard, setHeard] = useState("");
@@ -266,20 +273,16 @@ function Call({ bot }: { bot: Bot }) {
   }, []);
 
   const hush = useCallback(() => {
-    void window.ogb?.speechStop();
-  }, []);
+    bridge?.stop();
+  }, [bridge]);
 
   const listen = useCallback(() => {
     if (!alive.current || currentCall() !== bot.id) return;
     move("listening");
     setHeard("");
     setNote(null);
-    void window.ogb?.speechStart({ endpointMs: CALL_ENDPOINT_MS }).catch(() => {
-      if (alive.current && currentCall() === bot.id) {
-        setNote("The microphone couldn't start. Check Microphone and Speech Recognition access.");
-      }
-    });
-  }, [bot.id, move]);
+    bridge?.start({ endpointMs: CALL_ENDPOINT_MS });
+  }, [bot.id, bridge, move]);
 
   /** Speak, with the microphone closed for the duration (see the header
    * comment — an open mic during playback is a feedback loop). */
@@ -322,9 +325,8 @@ function Call({ bot }: { bot: Bot }) {
 
   // ── the microphone ───────────────────────────────────────────────────
   useEffect(() => {
-    const bridge = window.ogb;
     if (!bridge) return;
-    const offTranscript = bridge.onSpeechTranscript((line) => {
+    const offTranscript = bridge.onTranscript((line) => {
       if (!alive.current || currentCall() !== bot.id || phaseRef.current !== "listening") return;
       if (line.error) {
         setNote("Dictation stopped unexpectedly. Check Microphone and Speech Recognition access.");
@@ -399,7 +401,7 @@ function Call({ bot }: { bot: Bot }) {
       move("sending");
       dispatch({ type: "send", botId: bot.id, text: said, threadId: bot.threadId });
     });
-    const offEnd = bridge.onSpeechEnd(({ code, reason }) => {
+    const offEnd = bridge.onEnd(({ code, reason }) => {
       if (!alive.current || currentCall() !== bot.id) return;
       if (code === 2) {
         setNote("Calls need macOS dictation, which isn't available here yet.");
@@ -407,17 +409,21 @@ function Call({ bot }: { bot: Bot }) {
       }
       if (code === 1) {
         setNote(
-          reason === "helper-build-failed"
-            ? "The dictation helper couldn't be built. Install Apple's Command Line Tools and try again."
-            : reason === "dictation-disabled"
-              ? "Turn on Dictation in System Settings → Keyboard, then try again."
-              : reason === "speech-not-authorized"
-                ? "Allow Speech Recognition in System Settings → Privacy & Security, then try again."
-                : "Dictation couldn't start. Try again.",
+          reason === "transcription-failed" || reason === "recorder-unavailable"
+            ? "Cloud dictation failed. Add an ElevenLabs key in App Settings, then try again."
+            : reason === "microphone-unavailable"
+              ? "The microphone couldn't start. Check Microphone access."
+              : reason === "helper-build-failed"
+                ? "The dictation helper couldn't be built. Install Apple's Command Line Tools and try again."
+                : reason === "dictation-disabled"
+                  ? "Turn on Dictation in System Settings → Keyboard, then try again."
+                  : reason === "speech-not-authorized"
+                    ? "Allow Speech Recognition in System Settings → Privacy & Security, then try again."
+                    : "Dictation couldn't start. Try again.",
         );
         return;
       }
-      // the helper exits after every final result; if we are still meant
+      // the engine exits after every final result; if we are still meant
       // to be listening, that means the user's turn ended — start the next
       if (phaseRef.current === "listening") listen();
     });
@@ -426,12 +432,12 @@ function Call({ bot }: { bot: Bot }) {
     return () => {
       offTranscript();
       offEnd();
-      void window.ogb?.speechStop();
+      bridge.stop();
     };
     // busy/approval are intentionally initial snapshots. Their live changes
     // are handled below without tearing down native event listeners.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bot.id, bot.threadId, dispatch, hush, listen, move, sayThenListen]);
+  }, [bot.id, bot.threadId, bridge, dispatch, hush, listen, move, sayThenListen]);
 
   // ── narrate the work, speak the answer, read the approvals ───────────
   useEffect(() => {

@@ -55,6 +55,7 @@ import { normalizeState } from "@/lib/mascot";
 import { goalCoordinatorForComposer, groupComposerHint, jevRoomRoutingOn, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { speechBridgeFor } from "@/lib/speech-bridge";
 import { ReplyQuote } from "./ReplyQuote";
 import { useThreadRefs } from "./ThreadRefs";
 import {
@@ -730,43 +731,46 @@ export function Composer({
     editAttachments((prev) => [...prev, pasteAttachment(pasted)]);
   };
 
-  // native dictation: partials stream into the input while the Swift
-  // helper runs; the final transcript stays in the box, ready to edit/send
+  // dictation: on macOS the Swift helper streams partials into the input
+  // while it runs; on Windows the cloud recorder emits one final transcript.
+  // Either way the final transcript stays in the box, ready to edit/send.
   useEffect(() => {
     if (!recording) return;
-    const bridge = window.ogb;
+    const bridge = speechBridgeFor(capabilities);
     if (!bridge) {
       setRecording(false);
       return;
     }
     setSpeechError(null);
-    const offTranscript = bridge.onSpeechTranscript((line) => {
-      if (typeof line.text === "string") {
+    const offTranscript = bridge.onTranscript((line) => {
+      if (line.text) {
         const base = baseText.current;
         editText(base ? `${base} ${line.text}` : line.text);
       }
     });
-    const offEnd = bridge.onSpeechEnd(({ code, reason }) => {
+    const offEnd = bridge.onEnd(({ code, reason }) => {
       setRecording(false);
       if (code === 2) {
         setSpeechError(t("composer.dictation.macOnly"));
       } else if (code === 1) {
         setSpeechError(t(
-          reason === "dictation-disabled"
-            ? "composer.dictation.disabled"
-            : reason === "speech-not-authorized"
-              ? "composer.dictation.permission"
-              : "composer.dictation.failed",
+          reason === "transcription-failed"
+            ? "composer.dictation.cloudFailed"
+            : reason === "dictation-disabled"
+              ? "composer.dictation.disabled"
+              : reason === "speech-not-authorized"
+                ? "composer.dictation.permission"
+                : "composer.dictation.failed",
         ));
       }
     });
-    void bridge.speechStart();
+    bridge.start();
     return () => {
       offTranscript();
       offEnd();
-      void bridge.speechStop();
+      bridge.stop();
     };
-  }, [recording, editText]);
+  }, [recording, editText, capabilities]);
 
   const toggleMic = () => {
     if (!capabilities.dictation.available || !window.ogb) {
