@@ -47,11 +47,13 @@ The audio itself is an mp3 file in the attachments directory on your computer, w
 
 On macOS, call mode combines native on-device speech recognition with the configured voice. It is deliberately half-duplex: the microphone pauses while the bot speaks to prevent the app from transcribing its own audio.
 
+On Windows, call mode uses cloud dictation for your side of the conversation (see below); narration, spoken approvals, and the half-duplex loop work the same way.
+
 Tool progress and approval requests can be narrated during a call so long-running work does not sound disconnected.
 
 ## Dictation
 
-The composer microphone uses Apple's local speech recognition in the macOS desktop build. Linux and Windows dictation are not currently shipped.
+The composer microphone uses Apple's local speech recognition in the macOS desktop build. On Windows, the desktop build records the microphone and transcribes through the harness with the configured ElevenLabs key (the same credential voice playback uses) — add the key in App Settings to turn dictation on. Linux dictation is not currently shipped.
 
 ## Memory
 

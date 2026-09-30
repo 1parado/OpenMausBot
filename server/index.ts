@@ -320,6 +320,7 @@ import {
   toWireTask,
 } from "./store.ts";
 import * as tts from "./tts/index.ts";
+import * as stt from "./stt/index.ts";
 import { createDecider, deciderIncludedHere, deciderReady, deciderSavePatch, describeDecider } from "./decider/index.ts";
 import { decideRoomResponder, type RoomRoutingInput } from "./decider/room-routing.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
@@ -22546,6 +22547,46 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         // "you haven't set this up yet" is not a provider failure — 409 so
         // the client can point at App Settings instead of showing a 502
         if (e instanceof tts.NoVoiceConfigured) return json(res, 409, { error: e.message });
+        return json(res, 502, { error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+
+    // ── dictation (cloud speech-to-text) ──────────────────────────────
+    // Raw audio bytes in, transcript out. The key stays on the harness —
+    // same rule as /api/tts/speak. macOS keeps its on-device recognizer;
+    // this endpoint is what makes the composer mic and calls work on
+    // Windows, where no bundled on-device engine exists.
+    if (method === "POST" && path === "/api/stt/transcribe") {
+      const declared = Number(req.headers["content-length"]);
+      if (Number.isFinite(declared) && declared > stt.MAX_AUDIO_BYTES) {
+        return json(res, 413, { error: "recording too large" });
+      }
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      let overflow = false;
+      const audio: Buffer = await new Promise((resolve, reject) => {
+        req.on("data", (c: Buffer) => {
+          bytes += c.length;
+          if (bytes > stt.MAX_AUDIO_BYTES) {
+            overflow = true;
+            return resolve(Buffer.alloc(0));
+          }
+          chunks.push(c);
+        });
+        req.on("end", () => resolve(Buffer.concat(chunks)));
+        req.on("error", reject);
+      });
+      if (overflow || !audio.byteLength) {
+        return json(res, audio.byteLength === 0 && !overflow ? 400 : 413, {
+          error: audio.byteLength === 0 && !overflow ? "audio body required" : "recording too large",
+        });
+      }
+      const mime = String(req.headers["content-type"] ?? "audio/webm").split(";")[0].trim() || "audio/webm";
+      try {
+        const text = await stt.transcribe(cfg, new Uint8Array(audio), mime);
+        return json(res, 200, { text });
+      } catch (e) {
+        if (e instanceof stt.NoSpeechConfigured) return json(res, 409, { error: e.message });
         return json(res, 502, { error: e instanceof Error ? e.message : String(e) });
       }
     }

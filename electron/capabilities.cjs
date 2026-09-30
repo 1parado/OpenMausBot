@@ -118,12 +118,16 @@ function desktopCapabilities({
     screenPreview.reasonCode =
       hostPlatform === "linux" ? "headless-session" : "unsupported-platform";
   }
+  // Dictation: macOS runs its on-device recognizer; Windows has no bundled
+  // on-device engine, so the mic records and the harness transcribes with
+  // the hosted STT credential (the same ElevenLabs key voice playback uses).
+  const isWin = hostPlatform === "win32";
   const dictation = {
-    available: isMac,
-    engine: isMac ? "apple-speech" : "none",
+    available: isMac || isWin,
+    engine: isMac ? "apple-speech" : isWin ? "cloud-speech" : "none",
     onDevice: isMac,
   };
-  if (!isMac) dictation.reasonCode = "unsupported-platform";
+  if (!isMac && !isWin) dictation.reasonCode = "unsupported-platform";
   const localComputer = {
     available: localAvailable,
     support:
