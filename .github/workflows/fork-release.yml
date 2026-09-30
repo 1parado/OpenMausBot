@@ -1,0 +1,102 @@
+# Fork-only release: build the Windows installer on a real Windows runner
+# and publish it straight to a GitHub release on this fork, without the
+# canonical release.yml gates that require macOS signing secrets and the
+# legacy updater mirror. Artifact-only by default: pass publish=true to
+# create/attach the release.
+name: Fork Release (Windows)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create/attach to"
+        required: true
+        default: "v0.1.91-fork.1"
+      title:
+        description: "Release title"
+        required: true
+        default: "OpenMausBot 0.1.91 (fork: Feishu connector + Windows voice)"
+      prerelease:
+        description: "Mark as prerelease"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: NSIS installer -> release
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Clean build outputs
+        shell: bash
+        run: rm -rf dist dist-server release
+      - run: pnpm package:win
+      - name: "Gate: bundled browser works with an empty home"
+        run: node scripts/smoke-browser-bundle.mjs --resources "${{ github.workspace }}/release/win-unpacked/resources"
+      - name: "Gate: packaged server discovers its browser"
+        env:
+          OMB_SMOKE_DIST: ${{ github.workspace }}/release/win-unpacked/resources/browser-engine
+        run: node scripts/smoke-packaged-server.mjs --browser-bundle "${{ github.workspace }}/release/win-unpacked/resources/browser-engine"
+      - name: "Gate: the packaged server starts and serves /api/health"
+        shell: bash
+        run: |
+          res=release/win-unpacked/resources
+          [ -f "$res/server/index.js" ] || { echo "::error::missing server/index.js"; exit 1; }
+          [ -f "$res/ui/index.html" ] || { echo "::error::missing ui/index.html"; exit 1; }
+          HOME="$RUNNER_TEMP/omb-smoke" USERPROFILE="$RUNNER_TEMP/omb-smoke" \
+            OMB_PORT=21987 node "$res/server/index.js" > "$RUNNER_TEMP/server.log" 2>&1 &
+          pid=$!
+          for _ in $(seq 1 90); do
+            if curl -fsS --max-time 2 http://127.0.0.1:21987/api/health >/dev/null 2>&1; then
+              echo "packaged server answered /api/health"
+              kill $pid 2>/dev/null || true
+              exit 0
+            fi
+            kill -0 $pid 2>/dev/null || break
+            sleep 1
+          done
+          echo "::error::the packaged server never served /api/health"
+          cat "$RUNNER_TEMP/server.log" || true
+          exit 1
+      - name: Report what was built
+        shell: bash
+        run: ls -lh release/*.exe release/*.yml
+      - name: Create the release and attach the installer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          TITLE: ${{ inputs.title }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -e
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            printf '%s\n' \
+              "Fork release of OpenMausBot built from the \`feat/feishu-connector-voice\` branch." \
+              "" \
+              "Adds on top of upstream 0.1.91:" \
+              "- **Feishu connector** — QR-code app registration + WebSocket long connection; every Feishu/Lark chat becomes a bot surface (\`pnpm feishu scan\` / \`pnpm feishu start\`)." \
+              "- **Windows dictation & call input** — cloud STT bridge (\`POST /api/stt/transcribe\`), composer microphone and call mode now work on Windows." \
+              "- **Android reply audio** — per-chat TextToSpeech toggle reads finished bot replies aloud." \
+              "" \
+              "Unsigned build (SmartScreen may warn). macOS/Linux installers are not provided by this fork." > release-notes.tmp
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "$TITLE" --prerelease \
+              --notes-file release-notes.tmp
+          fi
+          gh release upload "$TAG" release/*.exe release/*.exe.blockmap release/latest.yml \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | "\(.name) \(.size)"'
