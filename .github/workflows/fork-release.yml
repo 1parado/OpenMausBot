@@ -48,7 +48,7 @@ jobs:
         run: node scripts/smoke-browser-bundle.mjs --resources "${{ github.workspace }}/release/win-unpacked/resources"
       - name: "Gate: packaged server discovers its browser"
         env:
-          OMB_SMOKE_DIST: ${{ github.workspace }}/release/win-unpacked/resources/browser-engine
+          OMB_SMOKE_DIST: ${{ github.workspace }}/release/win-unpacked/resources/server
         run: node scripts/smoke-packaged-server.mjs --browser-bundle "${{ github.workspace }}/release/win-unpacked/resources/browser-engine"
       - name: "Gate: the packaged server starts and serves /api/health"
         shell: bash
