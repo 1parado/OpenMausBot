@@ -439,7 +439,8 @@ private fun LoadedChat(
     // other half of the loop composer dictation starts. Per chat, per
     // session; turning it on never replays the backlog — the spoken marker
     // seeds at the newest reply, so only messages that arrive later are read.
-    val replySpeaker = remember(chatId) { ReplySpeaker(LocalContext.current) }
+    val appContext = LocalContext.current
+    val replySpeaker = remember(chatId) { ReplySpeaker(appContext) }
     var replyAudioOn by remember(chatId) { mutableStateOf(false) }
     var lastSpokenReplyId by remember(chatId) { mutableStateOf<String?>(null) }
     DisposableEffect(chatId) {
@@ -1213,7 +1214,7 @@ private fun ChatHeader(
                 } else {
                     "Read ${chat.name}'s replies aloud"
                 },
-                onClick = toggleReplyAudio,
+                onClick = onToggleReplyAudio,
                 tint = if (replyAudioOn) MaterialTheme.colorScheme.primary else Color.Unspecified,
             )
             // The computer is a bot idea; a room has none (§12).
